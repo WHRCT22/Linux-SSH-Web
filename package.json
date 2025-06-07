@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-basic-auth": "^1.2.1",
+    "multer": "^2.0.1",
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.2"
+  }
+}
