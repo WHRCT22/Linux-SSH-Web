@@ -144,7 +144,7 @@ const selectAllCheckbox = document.getElementById('select-all-checkbox');
 const downloadSelectedBtn = document.getElementById('download-selected-btn');
 const selectedFiles = new Set(); // 存储选中的完整路径
 
-// 文件浏览器面板元素，用于保存宽度
+// 文件浏览器面板元素
 const fileBrowserContainer = document.getElementById('file-browser-container');
 
 // 新增文件操作按钮
@@ -152,10 +152,14 @@ const refreshBtn = document.getElementById('refresh-btn');
 const createFolderBtn = document.getElementById('create-folder-btn');
 const createFileBtn = document.getElementById('create-file-btn');
 
+// 新增：文件浏览器展开/收起按钮
+const toggleFileBrowserBtn = document.getElementById('toggle-file-browser-btn');
+
 
 // Cookie 常量
-const FILE_BROWSER_WIDTH_COOKIE = 'fileBrowserWidth';
 const LAST_FILE_PATH_COOKIE = 'lastFilePath';
+const FILE_BROWSER_COLLAPSED_COOKIE = 'fileBrowserCollapsed'; // 文件浏览器折叠状态Cookie
+
 let currentPath = '/root'; // 默认路径，如果Cookie中没有保存，则使用此路径
 
 // 辅助函数：格式化字节大小 (客户端本地函数)
@@ -313,7 +317,11 @@ function renderFileList(files) {
         const parentPath = normalizePath(currentPath + '/..');
         const li = document.createElement('li');
         li.innerHTML = `<i class="fas fa-level-up-alt fa-fw"></i> ..`;
-        li.onclick = () => fetchAndDisplayFiles(parentPath);
+        li.onclick = (e) => {
+            if (!e.target.classList.contains('file-checkbox')) {
+                fetchAndDisplayFiles(parentPath);
+            }
+        };
         li.classList.add('no-context', 'parent-dir-item'); // 添加标记，防止右键菜单和被全选
         fileListEl.appendChild(li);
     }
@@ -492,7 +500,13 @@ fileListEl.addEventListener('contextmenu', (e) => {
     contextMenu.style.top = `${y}px`;
 });
 
-window.addEventListener('click', () => { contextMenu.style.display = 'none'; });
+window.addEventListener('click', (e) => {
+    // 只有当点击目标不是上下文菜单自身或其子元素时才隐藏
+    if (!contextMenu.contains(e.target)) {
+        contextMenu.style.display = 'none';
+    }
+});
+
 
 // 上下文菜单操作的事件处理
 renameBtn.addEventListener('click', async () => {
@@ -756,28 +770,41 @@ function showStatusMessage(message, type = 'success') {
     }
 }
 
+// === 文件浏览器展开/收起逻辑 ===
+let isFileBrowserCollapsed = true; // 默认是收起状态
+
+function updateFileBrowserState() {
+    if (isFileBrowserCollapsed) {
+        fileBrowserContainer.classList.add('collapsed');
+        fileBrowserContainer.classList.remove('visible');
+    } else {
+        fileBrowserContainer.classList.remove('collapsed');
+        fileBrowserContainer.classList.add('visible');
+    }
+    // 保存状态到 Cookie
+    setCookie(FILE_BROWSER_COLLAPSED_COOKIE, isFileBrowserCollapsed, 365);
+    // 延迟调用 fitAddon.fit() 以适应 CSS 动画
+    // 使用 requestAnimationFrame 配合 setTimeout 确保在下一帧更新后调用 fitAddon
+    requestAnimationFrame(() => {
+        setTimeout(() => fitAddon.fit(), 350); // 350ms 略大于 CSS transition 的 300ms
+    });
+}
+
+toggleFileBrowserBtn.addEventListener('click', () => {
+    isFileBrowserCollapsed = !isFileBrowserCollapsed;
+    updateFileBrowserState();
+});
+
 // 页面初始加载
 document.addEventListener('DOMContentLoaded', () => {
-    // 加载文件浏览器宽度
-    const savedWidth = getCookie(FILE_BROWSER_WIDTH_COOKIE);
-    if (savedWidth) {
-        fileBrowserContainer.style.width = savedWidth;
+    // 检查并恢复文件浏览器折叠状态
+    const savedCollapsedState = getCookie(FILE_BROWSER_COLLAPSED_COOKIE);
+    if (savedCollapsedState !== null) {
+        isFileBrowserCollapsed = (savedCollapsedState === 'true');
+    } else {
+        isFileBrowserCollapsed = true; // 默认首次加载是收起
     }
-
-    // 监听文件浏览器宽度变化并保存
-    // 使用 MutationObserver 监听 style 属性变化，以捕获用户拖动改变宽度
-    const observer = new MutationObserver(mutations => {
-        mutations.forEach(mutation => {
-            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
-                const currentWidth = fileBrowserContainer.style.width;
-                if (currentWidth) {
-                    setCookie(FILE_BROWSER_WIDTH_COOKIE, currentWidth, 365); // 保存1年
-                }
-            }
-        });
-    });
-    observer.observe(fileBrowserContainer, { attributes: true });
-
+    updateFileBrowserState(); // 应用初始状态
 
     // 加载上次的文件路径
     const savedPath = getCookie(LAST_FILE_PATH_COOKIE);

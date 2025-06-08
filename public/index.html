@@ -17,7 +17,83 @@
         overflow: hidden;
     }
     #main-content { display: flex; width: 100vw; height: 100vh; }
-    #file-browser-container { width: 350px; min-width: 250px; height: 100%; background-color: #252526; color: #ccc; display: flex; flex-direction: column; border-right: 2px solid #2f2b2b; resize: horizontal; overflow: auto; }
+
+    /* === 文件浏览器容器样式调整 === */
+    #file-browser-container {
+        height: 100%;
+        background-color: #252526;
+        color: #ccc;
+        display: flex;
+        flex-direction: row; /* 内部 flex 布局，内容和按钮并排 */
+        border-right: 2px solid #2f2b2b;
+        transition: width 0.3s ease; /* 宽度变化的过渡效果 */
+        position: relative; /* 方便内部绝对定位按钮 */
+        flex-shrink: 0; /* 防止其被终端挤压 */
+        overflow: hidden; /* 防止内容溢出，重要 */
+        /* 移除 resize: horizontal */
+        min-width: 30px; /* 最小宽度，与收起宽度一致 */
+    }
+
+    /* 默认状态或收起状态 */
+    #file-browser-container.collapsed {
+        width: 30px; /* 收起时的最终宽度 */
+    }
+
+    /* 展开状态 */
+    #file-browser-container.visible {
+        width: 350px; /* 展开时的宽度 */
+        /* 移除 min-width: 250px; 因为现在是固定宽度切换，而不是拖动 */
+    }
+
+    /* 新增：包裹文件浏览器内容的容器，用于隐藏/显示 */
+    #file-browser-content-wrapper {
+        flex-grow: 1; /* 占据可用空间 */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden; /* 防止内部内容溢出 */
+        transition: opacity 0.3s ease; /* 透明度变化的过渡效果 */
+    }
+
+    #file-browser-container.collapsed #file-browser-content-wrapper {
+        opacity: 0; /* 收起时隐藏内容 */
+        pointer-events: none; /* 禁用交互 */
+        /* width: 0; /* 不直接设置宽度，由 flex-grow 配合父容器宽度变化自动调整 */
+    }
+
+    /* === 切换按钮样式 === */
+    #toggle-file-browser-btn {
+        position: absolute;
+        right: 0; /* 始终在文件浏览器容器的右侧边缘 */
+        top: 50%;
+        transform: translateY(-50%); /* 垂直居中，初始不旋转 */
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        width: 30px; /* 按钮的宽度 */
+        height: 60px; /* 按钮的高度 */
+        cursor: pointer;
+        font-size: 1.2em;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-top-left-radius: 5px;
+        border-bottom-left-radius: 5px;
+        z-index: 10; /* 确保按钮在其他内容之上 */
+        transition: transform 0.3s ease, background-color 0.1s ease;
+    }
+
+    #toggle-file-browser-btn:hover {
+        background-color: #45a049;
+    }
+
+    /* 当文件浏览器收起时，按钮图标旋转 */
+    #file-browser-container.collapsed #toggle-file-browser-btn {
+        transform: translateY(-50%) rotate(180deg); /* 让左箭头变右箭头 */
+        border-radius: 5px; /* 收起时，按钮变成完整的胶囊形 */
+    }
+
+
+    /* === (文件浏览器内部现有样式，保持不变) === */
     #file-browser-header { padding: 8px 12px; background-color: #333; border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #current-path { font-weight: bold; color: #fff; }
     #file-list { list-style: none; padding: 0; margin: 0; flex-grow: 1; overflow-y: auto; }
@@ -62,25 +138,20 @@
         opacity: 0.7;
     }
     #upload-status { font-size: 12px; margin-top: 8px; color: #00ff00; height: 1em; text-align: center; }
+
+    /* === 终端面板样式 (无变动) === */
     #terminal-container { flex: 1; height: 100%; position: relative; display: flex; }
     #terminal { 
         width: 100%; 
         height: 100%; 
-        /* 新增：隐藏滚动条 */
-        overflow: auto; /* 确保内容溢出时仍能滚动 (但滚动条不可见) */
-        scrollbar-width: none; /* Firefox */
-        -ms-overflow-style: none;  /* Internet Explorer 10+ */
+        overflow: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
     }
-    /* 新增：隐藏 WebKit 浏览器 (如 Chrome, Safari) 的滚动条 */
-    #terminal::-webkit-scrollbar {
-        display: none;
-    }
+    #terminal::-webkit-scrollbar { display: none; }
+    .xterm-viewport { display: none !important; }
 
-    /* 隐藏 xterm-viewport 元素，并设置最高优先级 */
-    .xterm-viewport {
-        display: none !important;
-    }
-
+    /* === 状态面板样式 (无变动) === */
     #stats-overlay { position: absolute; top: 10px; right: 15px; background-color: rgba(0, 0, 0, 0.7); color: #00ff00; border-radius: 5px; border: 1px solid #00ff00; font-size: 13px; z-index: 100; text-align: right; overflow: hidden; }
     #toggle-stats-btn { background-color: rgba(255, 255, 255, 0.1); border: none; border-bottom: 1px solid #00ff00; color: #fff; padding: 4px 8px; cursor: pointer; width: 100%; text-align: right; font-family: inherit; }
     #toggle-stats-btn:hover { background-color: rgba(0, 255, 0, 0.2); }
@@ -88,13 +159,15 @@
     #stats-content.hidden { display: none; }
     #stats-content strong { color: #ffffff; min-width: 70px; display: inline-block; }
     #stats-content .speed-icon { color: #f0f0f0; }
+
+    /* === 右键上下文菜单样式 (无变动) === */
     #context-menu { display: none; position: absolute; z-index: 1000; background-color: #3e3e3e; border: 1px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); padding: 5px 0; min-width: 200px; }
     #context-menu .menu-item { padding: 8px 15px; color: #d4d4d4; cursor: pointer; display: flex; align-items: center; }
     #context-menu .menu-item:hover { background-color: #007acc; color: #fff; }
     #context-menu .menu-item i { margin-right: 10px; }
     .menu-item.hidden { display: none; }
 
-    /* 编辑器模态框样式 */
+    /* === 编辑器模态框样式 (无变动) === */
     #editor-modal {
         display: none;
         position: fixed;
@@ -194,7 +267,7 @@
         color: #ccc;
     }
 
-    /* 新增：多选相关的样式 */
+    /* === 多选相关的样式 (无变动) === */
     .file-checkbox {
         margin-right: 10px;
         transform: scale(1.2); /* 使复选框稍大 */
@@ -228,27 +301,33 @@
 <body>
     <main id="main-content">
         <!-- 文件浏览器面板 -->
-        <div id="file-browser-container">
-            <div id="file-browser-header">路径: <span id="current-path">/</span></div>
-            <div id="select-all-container">
-                <input type="checkbox" id="select-all-checkbox">
-                <label for="select-all-checkbox">全选</label>
-            </div>
-            <ul id="file-list"></ul>
-            <div id="file-actions-section">
-                <!-- 新增：刷新、创建文件夹、创建文件按钮 -->
-                <button id="refresh-btn" class="action-btn"><i class="fas fa-sync-alt"></i> 刷新目录</button>
-                <button id="create-folder-btn" class="action-btn"><i class="fas fa-folder-plus"></i> 创建文件夹</button>
-                <button id="create-file-btn" class="action-btn"><i class="fas fa-file-alt"></i> 创建文件</button>
+        <div id="file-browser-container" class="collapsed"> <!-- 默认添加 collapsed 类 -->
+            <div id="file-browser-content-wrapper"> <!-- 新增：包裹文件浏览器主要内容的容器 -->
+                <div id="file-browser-header">路径: <span id="current-path">/</span></div>
+                <div id="select-all-container">
+                    <input type="checkbox" id="select-all-checkbox">
+                    <label for="select-all-checkbox">全选</label>
+                </div>
+                <ul id="file-list"></ul>
+                <div id="file-actions-section">
+                    <!-- 新增：刷新、创建文件夹、创建文件按钮 -->
+                    <button id="refresh-btn" class="action-btn"><i class="fas fa-sync-alt"></i> 刷新目录</button>
+                    <button id="create-folder-btn" class="action-btn"><i class="fas fa-folder-plus"></i> 创建文件夹</button>
+                    <button id="create-file-btn" class="action-btn"><i class="fas fa-file-alt"></i> 创建文件</button>
 
-                <form id="upload-form" enctype="multipart/form-data">
-                    <input type="file" id="file-input" name="file" required>
-                    <input type="hidden" id="upload-path" name="path">
-                    <label for="file-input" class="action-btn"><i class="fas fa-upload"></i> 上传文件</label>
-                </form>
-                <button id="download-selected-btn" class="action-btn" disabled><i class="fas fa-file-archive"></i> 打包下载选中项 (0)</button>
-                <div id="upload-status"></div>
+                    <form id="upload-form" enctype="multipart/form-data">
+                        <input type="file" id="file-input" name="file" required>
+                        <input type="hidden" id="upload-path" name="path">
+                        <label for="file-input" class="action-btn"><i class="fas fa-upload"></i> 上传文件</label>
+                    </form>
+                    <button id="download-selected-btn" class="action-btn" disabled><i class="fas fa-file-archive"></i> 打包下载选中项 (0)</button>
+                    <div id="upload-status"></div>
+                </div>
             </div>
+            <!-- 新增：文件浏览器展开/收起按钮 -->
+            <button id="toggle-file-browser-btn" class="toggle-btn">
+                <i class="fas fa-chevron-left"></i> <!-- 初始图标保持为左箭头，CSS 负责旋转 -->
+            </button>
         </div>
 
         <!-- 终端面板 -->
