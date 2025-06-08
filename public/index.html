@@ -5,154 +5,244 @@
     <title>网页 SSH & 文件管理器</title>
     <link rel="stylesheet" href="/css/xterm.min.css" />
     <link rel="stylesheet" href="https://lf9-cdn-tos.bytecdntp.com/cdn/expire-1-M/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        /* === (现有布局样式无变动) === */
-        html, body { margin: 0; padding: 0; height: 100%; background-color: #1a1a1a; font-family: 'Consolas', 'Monaco', monospace; overflow: hidden; }
-        #main-content { display: flex; width: 100vw; height: 100vh; }
-        #file-browser-container { width: 350px; min-width: 250px; height: 100%; background-color: #252526; color: #ccc; display: flex; flex-direction: column; border-right: 2px solid #000; resize: horizontal; overflow: auto; }
-        #file-browser-header { padding: 8px 12px; background-color: #333; border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        #current-path { font-weight: bold; color: #fff; }
-        #file-list { list-style: none; padding: 0; margin: 0; flex-grow: 1; overflow-y: auto; }
-        #file-list li { padding: 6px 12px; cursor: pointer; border-bottom: 1px solid #333; display: flex; align-items: center; white-space: nowrap; }
-        #file-list li:hover { background-color: #3c3c3c; }
-        #file-list li .fa-fw { margin-right: 8px; color: #85c1e9; }
-        #file-list li .fa-folder { color: #f5c518; }
-        .file-name { flex-grow: 1; overflow: hidden; text-overflow: ellipsis; }
-        .file-size { font-size: 0.8em; color: #888; margin-left: 10px; }
-        #upload-section { padding: 10px; border-top: 1px solid #000; background-color: #333; }
-        #upload-form input[type="file"] { display: none; }
-        .upload-btn { display: block; padding: 8px; background-color: #4CAF50; color: white; text-align: center; border: none; border-radius: 3px; cursor: pointer; font-family: 'Consolas', 'Monaco', monospace; font-size: 14px; }
-        .upload-btn:hover { background-color: #45a049; }
-        #upload-status { font-size: 12px; margin-top: 8px; color: #00ff00; height: 1em; text-align: center; }
-        #terminal-container { flex: 1; height: 100%; position: relative; display: flex; }
-        #terminal { width: 100%; height: 100%; }
-        #stats-overlay { position: absolute; top: 10px; right: 15px; background-color: rgba(0, 0, 0, 0.7); color: #00ff00; border-radius: 5px; border: 1px solid #00ff00; font-size: 13px; z-index: 100; text-align: right; overflow: hidden; }
-        #toggle-stats-btn { background-color: rgba(255, 255, 255, 0.1); border: none; border-bottom: 1px solid #00ff00; color: #fff; padding: 4px 8px; cursor: pointer; width: 100%; text-align: right; font-family: inherit; }
-        #toggle-stats-btn:hover { background-color: rgba(0, 255, 0, 0.2); }
-        #stats-content { padding: 8px 12px; line-height: 1.6; min-width: 280px; transition: all 0.3s ease; }
-        #stats-content.hidden { display: none; }
-        #stats-content strong { color: #ffffff; min-width: 70px; display: inline-block; }
-        #stats-content .speed-icon { color: #f0f0f0; }
-        #context-menu { display: none; position: absolute; z-index: 1000; background-color: #3e3e3e; border: 1px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); padding: 5px 0; min-width: 200px; }
-        #context-menu .menu-item { padding: 8px 15px; color: #d4d4d4; cursor: pointer; display: flex; align-items: center; }
-        #context-menu .menu-item:hover { background-color: #007acc; color: #fff; }
-        #context-menu .menu-item i { margin-right: 10px; }
-        .menu-item.hidden { display: none; }
+ <style>
+    /* === (现有布局样式无变动) === */
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background-color: #1a1a1a;
+        /* 更新字体 */
+        font-family: 'JetBrains Mono', 'Roboto Mono', 'Consolas', 'Monaco', 'Cascadia Mono', 'Microsoft YaHei Consolas', '思源黑体', 'Noto Sans Mono CJK SC', monospace;
+        overflow: hidden;
+    }
+    #main-content { display: flex; width: 100vw; height: 100vh; }
+    #file-browser-container { width: 350px; min-width: 250px; height: 100%; background-color: #252526; color: #ccc; display: flex; flex-direction: column; border-right: 2px solid #000; resize: horizontal; overflow: auto; }
+    #file-browser-header { padding: 8px 12px; background-color: #333; border-bottom: 1px solid #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #current-path { font-weight: bold; color: #fff; }
+    #file-list { list-style: none; padding: 0; margin: 0; flex-grow: 1; overflow-y: auto; }
+    #file-list li {
+        padding: 6px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #333;
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+    }
+    #file-list li:hover { background-color: #3c3c3c; }
+    #file-list li .fa-fw { margin-right: 8px; color: #85c1e9; }
+    #file-list li .fa-folder { color: #f5c518; }
+    .file-name { flex-grow: 1; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 0.8em; color: #888; margin-left: 10px; }
+    #file-actions-section { /* 统一上传和多选按钮区域 */
+        padding: 10px;
+        border-top: 1px solid #000;
+        background-color: #333;
+        display: flex;
+        flex-direction: column;
+        gap: 8px; /* 按钮之间的间距 */
+    }
+    #upload-form input[type="file"] { display: none; }
+    .action-btn { /* 通用按钮样式 */
+        display: block;
+        padding: 8px;
+        background-color: #4CAF50;
+        color: white;
+        text-align: center;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 14px;
+    }
+    .action-btn:hover { background-color: #45a049; }
+    .action-btn:disabled {
+        background-color: #555;
+        cursor: not-allowed;
+        opacity: 0.7;
+    }
+    #upload-status { font-size: 12px; margin-top: 8px; color: #00ff00; height: 1em; text-align: center; }
+    #terminal-container { flex: 1; height: 100%; position: relative; display: flex; }
+    #terminal { 
+        width: 100%; 
+        height: 100%; 
+        /* 新增：隐藏滚动条 */
+        overflow: auto; /* 确保内容溢出时仍能滚动 (但滚动条不可见) */
+        scrollbar-width: none; /* Firefox */
+        -ms-overflow-style: none;  /* Internet Explorer 10+ */
+    }
+    /* 新增：隐藏 WebKit 浏览器 (如 Chrome, Safari) 的滚动条 */
+    #terminal::-webkit-scrollbar {
+        display: none;
+    }
 
-        /* ===【【【 新增: 编辑器模态框样式 】】】=== */
-        #editor-modal {
-            display: none;
-            position: fixed;
-            z-index: 2000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.6);
-            align-items: center;
-            justify-content: center;
-        }
-        #editor-content {
-            background-color: #252526;
-            color: #d4d4d4;
-            border: 1px solid #555;
-            border-radius: 5px;
-            width: 80vw;
-            height: 85vh;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.7);
-        }
-        #editor-header {
-            padding: 10px 15px;
-            background-color: #333;
-            border-bottom: 1px solid #000;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-        }
-        #editor-filename {
-            font-weight: bold;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        #close-editor-btn {
-            background: none;
-            border: none;
-            color: #ccc;
-            font-size: 24px;
-            line-height: 1;
-            cursor: pointer;
-            padding: 0 5px;
-        }
-        #close-editor-btn:hover {
-            color: #fff;
-        }
-        #editor-textarea {
-            flex-grow: 1;
-            background-color: #1e1e1e;
-            color: #d4d4d4;
-            border: none;
-            padding: 15px;
-            font-family: 'Consolas', 'Monaco', monospace;
-            font-size: 16px;
-            line-height: 1.5;
-            resize: none;
-            box-sizing: border-box;
-            outline: none;
-        }
-        #editor-footer {
-            padding: 10px;
-            background-color: #333;
-            border-top: 1px solid #000;
-            text-align: right;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-        }
-        .editor-btn {
-            padding: 8px 16px;
-            border: 1px solid #555;
-            background-color: #4f4f4f;
-            color: #fff;
-            border-radius: 3px;
-            cursor: pointer;
-            margin-left: 10px;
-            font-family: inherit;
-        }
-        .editor-btn.primary {
-            background-color: #007acc;
-            border-color: #007acc;
-        }
-        .editor-btn:hover {
-            opacity: 0.9;
-        }
-        .editor-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        #editor-status {
-            font-size: 14px;
-            color: #ccc;
-        }
-    </style>
+    /* 隐藏 xterm-viewport 元素，并设置最高优先级 */
+    .xterm-viewport {
+        display: none !important;
+    }
+
+    #stats-overlay { position: absolute; top: 10px; right: 15px; background-color: rgba(0, 0, 0, 0.7); color: #00ff00; border-radius: 5px; border: 1px solid #00ff00; font-size: 13px; z-index: 100; text-align: right; overflow: hidden; }
+    #toggle-stats-btn { background-color: rgba(255, 255, 255, 0.1); border: none; border-bottom: 1px solid #00ff00; color: #fff; padding: 4px 8px; cursor: pointer; width: 100%; text-align: right; font-family: inherit; }
+    #toggle-stats-btn:hover { background-color: rgba(0, 255, 0, 0.2); }
+    #stats-content { padding: 8px 12px; line-height: 1.6; min-width: 280px; transition: all 0.3s ease; }
+    #stats-content.hidden { display: none; }
+    #stats-content strong { color: #ffffff; min-width: 70px; display: inline-block; }
+    #stats-content .speed-icon { color: #f0f0f0; }
+    #context-menu { display: none; position: absolute; z-index: 1000; background-color: #3e3e3e; border: 1px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); padding: 5px 0; min-width: 200px; }
+    #context-menu .menu-item { padding: 8px 15px; color: #d4d4d4; cursor: pointer; display: flex; align-items: center; }
+    #context-menu .menu-item:hover { background-color: #007acc; color: #fff; }
+    #context-menu .menu-item i { margin-right: 10px; }
+    .menu-item.hidden { display: none; }
+
+    /* 编辑器模态框样式 */
+    #editor-modal {
+        display: none;
+        position: fixed;
+        z-index: 2000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.6);
+        align-items: center;
+        justify-content: center;
+    }
+    #editor-content {
+        background-color: #252526;
+        color: #d4d4d4;
+        border: 1px solid #555;
+        border-radius: 5px;
+        width: 80vw;
+        height: 85vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.7);
+    }
+    #editor-header {
+        padding: 10px 15px;
+        background-color: #333;
+        border-bottom: 1px solid #000;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-shrink: 0;
+    }
+    #editor-filename {
+        font-weight: bold;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    #close-editor-btn {
+        background: none;
+        border: none;
+        color: #ccc;
+        font-size: 24px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 5px;
+    }
+    #close-editor-btn:hover {
+        color: #fff;
+    }
+    #editor-textarea {
+        flex-grow: 1;
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+        border: none;
+        padding: 15px;
+        font-family: 'JetBrains Mono', 'Roboto Mono', 'Consolas', 'Monaco', 'Cascadia Mono', 'Microsoft YaHei Consolas', '思源黑体', 'Noto Sans Mono CJK SC', monospace;
+        font-size: 16px;
+        line-height: 1.5;
+        resize: none;
+        box-sizing: border-box;
+        outline: none;
+    }
+    #editor-footer {
+        padding: 10px;
+        background-color: #333;
+        border-top: 1px solid #000;
+        text-align: right;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-shrink: 0;
+    }
+    .editor-btn {
+        padding: 8px 16px;
+        border: 1px solid #555;
+        background-color: #4f4f4f;
+        color: #fff;
+        border-radius: 3px;
+        cursor: pointer;
+        margin-left: 10px;
+        font-family: inherit;
+    }
+    .editor-btn.primary {
+        background-color: #007acc;
+        border-color: #007acc;
+    }
+    .editor-btn:hover {
+        opacity: 0.9;
+    }
+    .editor-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    #editor-status {
+        font-size: 14px;
+        color: #ccc;
+    }
+
+    /* 新增：多选相关的样式 */
+    .file-checkbox {
+        margin-right: 10px;
+        transform: scale(1.2); /* 使复选框稍大 */
+        cursor: pointer;
+    }
+    #file-list li.selected {
+        background-color: #004c8c; /* 选中项的背景色 */
+    }
+    #select-all-container {
+        display: flex;
+        align-items: center;
+        padding: 5px 12px;
+        background-color: #3c3c3c;
+        border-bottom: 1px solid #000;
+        color: #fff;
+    }
+    #select-all-checkbox {
+        margin-right: 8px;
+        transform: scale(1.2);
+        cursor: pointer;
+    }
+    .parent-dir-item {
+        font-weight: bold;
+        color: #85c1e9;
+    }
+    .parent-dir-item .file-checkbox {
+        display: none; /* 隐藏父级目录的复选框 */
+    }
+</style>
 </head>
 <body>
     <main id="main-content">
         <!-- 文件浏览器面板 -->
         <div id="file-browser-container">
             <div id="file-browser-header">路径: <span id="current-path">/</span></div>
+            <div id="select-all-container">
+                <input type="checkbox" id="select-all-checkbox">
+                <label for="select-all-checkbox">全选</label>
+            </div>
             <ul id="file-list"></ul>
-            <div id="upload-section">
+            <div id="file-actions-section">
                 <form id="upload-form" enctype="multipart/form-data">
                     <input type="file" id="file-input" name="file" required>
                     <input type="hidden" id="upload-path" name="path">
-                    <label for="file-input" class="upload-btn"><i class="fas fa-upload"></i> 上传文件</label>
-                    <div id="upload-status"></div>
+                    <label for="file-input" class="action-btn"><i class="fas fa-upload"></i> 上传文件</label>
                 </form>
+                <button id="download-selected-btn" class="action-btn" disabled><i class="fas fa-file-archive"></i> 打包下载选中项 (0)</button>
+                <div id="upload-status"></div>
             </div>
         </div>
 
@@ -169,11 +259,10 @@
     <!-- 右键上下文菜单 -->
     <div id="context-menu">
         <div class="menu-item hidden" id="edit-btn"><i class="fas fa-edit fa-fw"></i> 编辑文件</div>
-        <div class="menu-item hidden" id="package-btn"><i class="fas fa-file-archive fa-fw"></i> 打包下载</div>
         <div class="menu-item" id="rename-btn"><i class="fas fa-i-cursor fa-fw"></i> 重命名</div>
         <div class="menu-item" id="delete-btn"><i class="fas fa-trash-alt fa-fw"></i> 删除</div>
     </div>
-    
+
     <!-- 文件编辑器模态框 -->
     <div id="editor-modal">
         <div id="editor-content">
