@@ -10,9 +10,23 @@ const { EventEmitter } = require('events');
 const multer = require('multer');
 const basicAuth = require('express-basic-auth'); // 引入基础验证库
 
-// --- (工具函数和 InteractiveSSH 类无变动) ---
-function formatBytes(bytes) { if (bytes === 0 || isNaN(bytes)) return '0 Bytes'; const k = 1024; const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; }
-function formatUptime(seconds) { const d = Math.floor(seconds / (3600*24)); const h = Math.floor(seconds % (3600*24) / 3600); const m = Math.floor(seconds % 3600 / 60); const s = Math.floor(seconds % 60); return `${d}天 ${h}小时 ${m}分钟 ${s}秒`; }
+// --- 工具函数 ---
+function formatBytes(bytes) {
+    if (bytes === 0 || isNaN(bytes)) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatUptime(seconds) {
+    if (isNaN(seconds) || seconds < 0) return 'N/A';
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${d}天 ${h}小时 ${m}分钟 ${s}秒`;
+}
 
 // 辅助函数：在远程SSH连接上执行命令
 async function executeRemoteCommand(sshConn, command) {
@@ -36,8 +50,106 @@ async function executeRemoteCommand(sshConn, command) {
     });
 }
 
-async function getRemoteStats(sshConn) { const commands = { ip: "hostname -I | awk '{print $1}'", cpuModel: "lscpu | grep 'Model name:' | sed 's/Model name:[ \t]*//'", cpuCores: "nproc", uptime: "cat /proc/uptime | awk '{print $1}'", memInfo: "cat /proc/meminfo", osInfo: "cat /etc/os-release", netInterface: "ip route get 1.1.1.1 | grep -oP 'dev \\K\\w+'", netDev: "cat /proc/net/dev" }; const [ip, cpuModel, cpuCores, uptime, memInfo, osInfo, netInterface, netDev] = await Promise.all(Object.values(commands).map(cmd => executeRemoteCommand(sshConn, cmd).catch(e => ''))); const memTotalLine = memInfo.split('\n').find(line => line.startsWith('MemTotal:')); const memAvailableLine = memInfo.split('\n').find(line => line.startsWith('MemAvailable:')); const totalMem = parseInt(memTotalLine.split(/\s+/)[1], 10) * 1024; const freeMem = parseInt(memAvailableLine.split(/\s+/)[1], 10) * 1024; const osNameLine = osInfo.split('\n').find(line => line.startsWith('PRETTY_NAME=')); const osName = osNameLine ? osNameLine.split('=')[1].replace(/"/g, '') : 'N/A'; let rx_bytes = 0, tx_bytes = 0; if (netInterface && netDev) { const netLine = netDev.split('\n').find(line => line.trim().startsWith(netInterface + ':')); if (netLine) { const stats = netLine.trim().split(/\s+/); rx_bytes = parseInt(stats[1], 10); tx_bytes = parseInt(stats[9], 10); } } return { ip: ip || 'N/A', osName, cpuModel: cpuModel || 'N/A', cpuCores: parseInt(cpuCores, 10) || 'N/A', uptime: formatUptime(parseFloat(uptime)), totalMem: formatBytes(totalMem), freeMem: formatBytes(freeMem), rx_bytes, tx_bytes, timestamp: Date.now() }; }
-class InteractiveSSH extends EventEmitter { constructor(config) { super(); this.config = config; this.conn = new Client(); } connect() { this.conn.on('ready', () => { this.emit('ready'); this.conn.shell({ term: 'xterm-256color' }, (err, stream) => { if (err) { return this.emit('error', err); } this.emit('shell', stream); stream.on('close', () => this.conn.end()); }); }).on('close', () => { this.emit('close'); }).on('error', (err) => { this.emit('error', err); }).connect(this.config); } disconnect() { this.conn.end(); } }
+/**
+ * 获取远程服务器统计信息
+ * @param {Client} sshConn - ssh2 Client 连接实例
+ * @returns {Promise<Object>} - 包含系统统计信息的对象
+ */
+async function getRemoteStats(sshConn) {
+    const commands = {
+        ip: "hostname -I | awk '{print $1}'",
+        cpuModel: "lscpu | grep 'Model name:' | sed 's/Model name:[ \\t]*//'",
+        cpuCores: "nproc",
+        uptime: "cat /proc/uptime | awk '{print $1}'",
+        memInfo: "cat /proc/meminfo",
+        osInfo: "cat /etc/os-release",
+        netInterface: "ip route get 1.1.1.1 | grep -oP 'dev \\K\\w+'", // 获取默认网络接口名
+        netDev: "cat /proc/net/dev" // 获取网络设备统计信息
+    };
+
+    // 并行执行所有命令，如果命令失败则返回空字符串，确保后续处理不会因为undefined而崩溃
+    const [ip, cpuModel, cpuCores, uptime, memInfo, osInfo, netInterface, netDev] =
+        await Promise.all(Object.values(commands).map(cmd => executeRemoteCommand(sshConn, cmd).catch(e => {
+            // console.error(`[getRemoteStats] 命令 '${cmd}' 执行失败: ${e.message}`); // 调试用
+            return ''; // 返回空字符串而不是抛出错误
+        })));
+
+    let totalMem = 0;
+    let freeMem = 0;
+
+    // 内存信息解析 - 增加undefined检查
+    const memTotalLine = memInfo.split('\n').find(line => line.startsWith('MemTotal:'));
+    const memAvailableLine = memInfo.split('\n').find(line => line.startsWith('MemAvailable:'));
+
+    if (memTotalLine) {
+        // 确保 `split` 后的数组有足够多的元素，并使用 `|| 0` 处理 `NaN`
+        totalMem = parseInt(memTotalLine.split(/\s+/)[1], 10) * 1024 || 0;
+    }
+    if (memAvailableLine) {
+        freeMem = parseInt(memAvailableLine.split(/\s+/)[1], 10) * 1024 || 0;
+    }
+
+    // 操作系统信息解析
+    const osNameLine = osInfo.split('\n').find(line => line.startsWith('PRETTY_NAME='));
+    const osName = osNameLine ? osNameLine.split('=')[1].replace(/"/g, '') : 'N/A';
+
+    let rx_bytes = 0;
+    let tx_bytes = 0;
+
+    // 网络流量信息解析
+    if (netInterface && netDev) {
+        const netLine = netDev.split('\n').find(line => line.trim().startsWith(netInterface + ':'));
+        if (netLine) {
+            const stats = netLine.trim().split(/\s+/);
+            // 确保 stats 数组有足够的元素，使用 `|| 0` 处理 `NaN`
+            rx_bytes = parseInt(stats[1], 10) || 0;
+            tx_bytes = parseInt(stats[9], 10) || 0;
+        }
+    }
+
+    return {
+        ip: ip || 'N/A', // 如果IP为空，显示N/A
+        osName,
+        cpuModel: cpuModel || 'N/A',
+        cpuCores: parseInt(cpuCores, 10) || 'N/A', // 确保为数字或N/A
+        uptime: formatUptime(parseFloat(uptime) || 0), // 确保为数字或0
+        totalMem: formatBytes(totalMem),
+        freeMem: formatBytes(freeMem),
+        rx_bytes,
+        tx_bytes,
+        timestamp: Date.now()
+    };
+}
+
+// InteractiveSSH 类保持不变，因为它处理的是 WebSocket 与 SSH Shell 的交互，不涉及 stats 收集
+class InteractiveSSH extends EventEmitter {
+    constructor(config) {
+        super();
+        this.config = config;
+        this.conn = new Client();
+    }
+
+    connect() {
+        this.conn.on('ready', () => {
+            this.emit('ready');
+            this.conn.shell({ term: 'xterm-256color' }, (err, stream) => {
+                if (err) {
+                    return this.emit('error', err);
+                }
+                this.emit('shell', stream);
+                stream.on('close', () => this.conn.end());
+            });
+        }).on('close', () => {
+            this.emit('close');
+        }).on('error', (err) => {
+            this.emit('error', err);
+        }).connect(this.config);
+    }
+
+    disconnect() {
+        this.conn.end();
+    }
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -55,7 +167,10 @@ app.use(express.json());
 
 const PORT = 3000;
 const sshConfig = {
-    host: '45.205.28.94', port: 22, username: 'root', password: 'vaxwKAEG7344', // 替换为你的实际SSH配置
+    host: '45.205.28.94',
+    port: 22,
+    username: 'root',
+    password: 'vaxwKAEG7344', // 替换为你的实际SSH配置
 };
 
 // 全局共享的SSH客户端，用于文件操作
@@ -103,10 +218,10 @@ connectSharedSsh();
 // --- 文件管理 API 接口 ---
 app.get('/api/files', (req, res) => {
     if (!sftp) return res.status(503).json({ error: 'SFTP 服务不可用' });
-    
+
     // 规范化远程路径：处理双斜杠、`.`、`..`等
     let remotePath = req.query.path || '.';
-    remotePath = path.posix.normalize(remotePath); 
+    remotePath = path.posix.normalize(remotePath);
 
     sftp.readdir(remotePath, (err, list) => {
         if (err) {
@@ -137,7 +252,7 @@ app.get('/api/download', (req, res) => {
     if (!remotePath) return res.status(400).send('必须提供文件路径');
 
     // 规范化路径
-    remotePath = path.posix.normalize(remotePath); 
+    remotePath = path.posix.normalize(remotePath);
 
     sftp.stat(remotePath, (err, stats) => {
         if (err) {
@@ -171,7 +286,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     // 使用 Buffer.from 和 toString 确保文件名编码正确，处理中文名
     const originalFilename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const cleanFilename = originalFilename.split(/[\\\/]/).pop(); // 提取文件名，防止路径穿越
-    
+
     // 规范化上传目标目录
     const remoteDirPath = path.posix.normalize(req.body.path);
     const remotePath = path.posix.join(remoteDirPath, cleanFilename);
@@ -183,7 +298,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
     writeStream.on('close', () => {
         fs.unlink(localPath, (err) => { // 删除临时上传文件
-            if(err) console.error(`[上传清理] 删除临时文件 ${localPath} 失败:`, err)
+            if (err) console.error(`[上传清理] 删除临时文件 ${localPath} 失败:`, err)
         });
         res.json({ success: true, message: `文件已上传至 ${remotePath}` });
     });
@@ -259,7 +374,7 @@ app.get('/api/package-download', async (req, res) => {
     if (!Array.isArray(itemPaths)) {
         itemPaths = [itemPaths];
     }
-    
+
     // 规范化所有传入路径
     itemPaths = itemPaths.map(p => path.posix.normalize(p));
 
@@ -308,7 +423,7 @@ app.get('/api/package-download', async (req, res) => {
                 // 如果路径不存在，或者stat失败，为了安全，假定它是文件或无效路径，取其父目录
                 commonBaseDir = path.posix.dirname(commonBaseDir);
             }
-            
+
             // 遍历所有路径，找到最长的共同前缀
             for (let i = 1; i < itemPaths.length; i++) {
                 let currentPathForComparison = itemPaths[i];
@@ -320,7 +435,7 @@ app.get('/api/package-download', async (req, res) => {
                 if (commonBaseDir === path.posix.sep) break; // 如果已经到根目录，就停止
             }
         }
-        
+
         // 确保 commonBaseDir 是一个规范的绝对路径，如果为空，则默认为根目录
         if (!commonBaseDir || commonBaseDir === '.') {
             commonBaseDir = path.posix.sep;
@@ -337,7 +452,7 @@ app.get('/api/package-download', async (req, res) => {
             // 此时应使用 '.' 来表示当前目录的内容。
             if (relPath === '') {
                 // 如果是目录，表示打包目录自身，则使用 '.'
-                return '.'; 
+                return '.';
             }
             return relPath;
         });
@@ -345,8 +460,8 @@ app.get('/api/package-download', async (req, res) => {
         const validRelativePaths = relativePaths.filter(p => p !== ''); // 过滤掉可能的空路径
 
         if (validRelativePaths.length === 0) {
-             cleanup(); // 没有有效的文件可打包
-             return res.status(400).send('没有找到有效的文件或目录进行打包。');
+            cleanup(); // 没有有效的文件可打包
+            return res.status(400).send('没有找到有效的文件或目录进行打包。');
         }
 
         // 3. 构建 zip 命令，在执行前改变目录
@@ -404,7 +519,7 @@ app.get('/api/file-content', (req, res) => {
     if (!sftp) return res.status(503).json({ error: 'SFTP 服务不可用' });
     let remotePath = req.query.path;
     if (!remotePath) return res.status(400).json({ error: '必须提供文件路径' });
-    
+
     // 规范化路径
     remotePath = path.posix.normalize(remotePath);
 
@@ -419,7 +534,7 @@ app.post('/api/save-file', (req, res) => {
     if (!sftp) return res.status(503).json({ error: 'SFTP 服务不可用' });
     let { path: remotePath, content } = req.body;
     if (!remotePath || content === undefined) { return res.status(400).json({ error: '必须提供文件路径和内容。' }); }
-    
+
     // 规范化路径
     remotePath = path.posix.normalize(remotePath);
 
@@ -474,8 +589,9 @@ app.post('/api/touch', (req, res) => {
 });
 
 
-// --- (静态文件服务和 WebSocket 逻辑无变动) ---
+// --- (静态文件服务和 WebSocket 逻辑) ---
 app.use(express.static(path.join(__dirname, 'public')));
+
 wss.on('connection', (ws, req) => {
     // WebSocket 连接升级请求不经过 Express 中间件，因此不需要单独处理验证
     // 但如果需要，可以在这里检查 req.headers.authorization
@@ -483,10 +599,70 @@ wss.on('connection', (ws, req) => {
     let statsInterval;
     let lastStats = null;
     const sshClient = new InteractiveSSH(sshConfig);
-    sshClient.on('shell', (shellStream) => { console.log('[SSH -> WebSocket] Shell 已准备好，可用于终端。'); shellStream.on('data', (data) => ws.send(data)); ws.on('message', (data) => { try { const parsedMsg = JSON.parse(data.toString()); if (parsedMsg.type === 'resize') { shellStream.setWindow(parsedMsg.rows, parsedMsg.cols); return; } } catch (e) { /* 不是 JSON 数据，直接写入 shell */ } shellStream.write(data); }); statsInterval = setInterval(async () => { try { const currentStats = await getRemoteStats(sshClient.conn); let rxSpeed = 0, txSpeed = 0; if (lastStats) { const timeDiff = (currentStats.timestamp - lastStats.timestamp) / 1000; if (timeDiff > 0) { rxSpeed = (currentStats.rx_bytes - lastStats.rx_bytes) / timeDiff; txSpeed = (currentStats.tx_bytes - lastStats.tx_bytes) / timeDiff; } } const statsForClient = { ...currentStats, rxSpeed: `${formatBytes(rxSpeed)}/s`, txSpeed: `${formatBytes(txSpeed)}/s` }; lastStats = currentStats; if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'stats', data: statsForClient })); } catch (error) { console.error('[状态错误] ', error.message); lastStats = null; } }, 2000); shellStream.on('close', () => { ws.close(); }); });
-    sshClient.on('error', (err) => { if (ws.readyState === ws.OPEN) ws.send(`\x1b[31m[SSH 连接错误: ${err.message}]\x1b[0m\r\n`); ws.close(); });
-    ws.on('close', () => { console.log('[WebSocket -> SSH] 客户端断开连接，关闭终端 SSH 连接。'); if (statsInterval) { clearInterval(statsInterval); } sshClient.disconnect(); });
-    sshClient.connect();
+
+    sshClient.on('shell', (shellStream) => {
+        console.log('[SSH -> WebSocket] Shell 已准备好，可用于终端。');
+        shellStream.on('data', (data) => ws.send(data));
+
+        ws.on('message', (data) => {
+            try {
+                const parsedMsg = JSON.parse(data.toString());
+                if (parsedMsg.type === 'resize') {
+                    shellStream.setWindow(parsedMsg.rows, parsedMsg.cols);
+                    return;
+                }
+            } catch (e) {
+                /* 不是 JSON 数据，直接写入 shell */
+            }
+            shellStream.write(data);
+        });
+
+        // 启动状态监控
+        statsInterval = setInterval(async () => {
+            try {
+                const currentStats = await getRemoteStats(sshClient.conn);
+                let rxSpeed = 0, txSpeed = 0;
+                if (lastStats) {
+                    const timeDiff = (currentStats.timestamp - lastStats.timestamp) / 1000;
+                    if (timeDiff > 0) {
+                        rxSpeed = (currentStats.rx_bytes - lastStats.rx_bytes) / timeDiff;
+                        txSpeed = (currentStats.tx_bytes - lastStats.tx_bytes) / timeDiff;
+                    }
+                }
+                const statsForClient = {
+                    ...currentStats,
+                    rxSpeed: `${formatBytes(rxSpeed)}/s`,
+                    txSpeed: `${formatBytes(txSpeed)}/s`
+                };
+                lastStats = currentStats; // 更新上一次的统计数据
+                if (ws.readyState === ws.OPEN) {
+                    ws.send(JSON.stringify({ type: 'stats', data: statsForClient }));
+                }
+            } catch (error) {
+                console.error('[状态错误] ', error.message);
+                lastStats = null; // 出现错误时重置lastStats，防止下次计算速度出错
+            }
+        }, 2000); // 每2秒发送一次状态
+
+        shellStream.on('close', () => {
+            ws.close();
+        });
+    });
+
+    sshClient.on('error', (err) => {
+        if (ws.readyState === ws.OPEN) ws.send(`\x1b[31m[SSH 连接错误: ${err.message}]\x1b[0m\r\n`);
+        ws.close();
+    });
+
+    ws.on('close', () => {
+        console.log('[WebSocket -> SSH] 客户端断开连接，关闭终端 SSH 连接。');
+        if (statsInterval) {
+            clearInterval(statsInterval); // 清除定时器
+        }
+        sshClient.disconnect();
+    });
+
+    sshClient.connect(); // 启动 SSH 连接
 });
 
 server.listen(PORT, () => console.log(`服务器正在 http://localhost:${PORT} 上运行`));
