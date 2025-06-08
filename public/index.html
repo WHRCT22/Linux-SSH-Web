@@ -236,6 +236,11 @@
             </div>
             <ul id="file-list"></ul>
             <div id="file-actions-section">
+                <!-- 新增：刷新、创建文件夹、创建文件按钮 -->
+                <button id="refresh-btn" class="action-btn"><i class="fas fa-sync-alt"></i> 刷新目录</button>
+                <button id="create-folder-btn" class="action-btn"><i class="fas fa-folder-plus"></i> 创建文件夹</button>
+                <button id="create-file-btn" class="action-btn"><i class="fas fa-file-alt"></i> 创建文件</button>
+
                 <form id="upload-form" enctype="multipart/form-data">
                     <input type="file" id="file-input" name="file" required>
                     <input type="hidden" id="upload-path" name="path">

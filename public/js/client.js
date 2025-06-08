@@ -125,7 +125,6 @@ const currentPathEl = document.getElementById('current-path');
 const fileInput = document.getElementById('file-input');
 const uploadPathInput = document.getElementById('upload-path');
 const uploadStatusEl = document.getElementById('upload-status');
-// let currentPath = '/root'; // 默认起始路径 - 将在 DOMContentLoaded 中从 Cookie 读取或使用此默认值
 
 const contextMenu = document.getElementById('context-menu');
 const renameBtn = document.getElementById('rename-btn');
@@ -140,15 +139,21 @@ const saveFileBtn = document.getElementById('save-file-btn');
 const closeEditorBtn = document.getElementById('close-editor-btn');
 const editorStatusEl = document.getElementById('editor-status');
 
-// === 新增：多选相关元素和逻辑 ===
+// 多选相关元素和逻辑
 const selectAllCheckbox = document.getElementById('select-all-checkbox');
 const downloadSelectedBtn = document.getElementById('download-selected-btn');
 const selectedFiles = new Set(); // 存储选中的完整路径
 
-// === 新增：文件浏览器面板元素，用于保存宽度 ===
+// 文件浏览器面板元素，用于保存宽度
 const fileBrowserContainer = document.getElementById('file-browser-container');
 
-// === 新增：Cookie 常量 ===
+// 新增文件操作按钮
+const refreshBtn = document.getElementById('refresh-btn');
+const createFolderBtn = document.getElementById('create-folder-btn');
+const createFileBtn = document.getElementById('create-file-btn');
+
+
+// Cookie 常量
 const FILE_BROWSER_WIDTH_COOKIE = 'fileBrowserWidth';
 const LAST_FILE_PATH_COOKIE = 'lastFilePath';
 let currentPath = '/root'; // 默认路径，如果Cookie中没有保存，则使用此路径
@@ -199,7 +204,7 @@ function normalizePath(p) {
     return normalized === '' ? '/' : normalized;
 }
 
-// === 新增：Cookie 辅助函数 ===
+// Cookie 辅助函数
 /**
  * 设置 Cookie
  * @param {string} name Cookie 名称
@@ -268,7 +273,7 @@ async function fetchAndDisplayFiles(pathStr) {
         currentPath = normalizePath(data.path);
         currentPathEl.textContent = currentPath;
         uploadPathInput.value = currentPath; // 更新上传目标路径
-        setCookie(LAST_FILE_PATH_COOKIE, currentPath, 365); // === 新增：保存当前路径到 Cookie ===
+        setCookie(LAST_FILE_PATH_COOKIE, currentPath, 365); // 保存当前路径到 Cookie
         renderFileList(data.files);
     } catch (error) {
         fileListEl.innerHTML = `<li><i class="fas fa-exclamation-triangle fa-fw"></i> 错误: ${error.message}</li>`;
@@ -410,7 +415,7 @@ function renderFileList(files) {
     updateDownloadSelectedButtonState(); // 最后更新一次按钮状态
 }
 
-// === 新增：全选复选框事件监听 ===
+// 全选复选框事件监听
 selectAllCheckbox.addEventListener('change', () => {
     // 仅选择/取消选择非父目录的复选框
     const checkboxes = fileListEl.querySelectorAll('li:not(.parent-dir-item) .file-checkbox');
@@ -429,7 +434,7 @@ selectAllCheckbox.addEventListener('change', () => {
     updateDownloadSelectedButtonState();
 });
 
-// === 修改：打包下载选中项按钮事件监听，使用 GET 方式 ===
+// 打包下载选中项按钮事件监听，使用 GET 方式
 downloadSelectedBtn.addEventListener('click', () => {
     if (selectedFiles.size === 0) {
         showStatusMessage('请至少选择一个文件或目录进行打包。', 'warning');
@@ -440,10 +445,6 @@ downloadSelectedBtn.addEventListener('click', () => {
     showStatusMessage(`正在打包 ${pathsToZip.length} 项为 ZIP...`, 'success');
     
     // 构建 GET 请求的 URL，通过重复参数传递多个路径
-    // 后端 /api/package-download 接口的逻辑：
-    // 如果只有 `?paths=/a/b/c` (单个路径)，req.query.paths 是字符串 '/a/b/c'
-    // 如果是 `?paths=/a&paths=/b` (多个路径)，req.query.paths 是数组 ['/a', '/b']
-    // 后端会统一处理成数组，因此这种方式是兼容的。
     const queryParams = pathsToZip.map(p => `paths=${encodeURIComponent(p)}`).join('&');
     const downloadUrl = `/api/package-download?${queryParams}`;
 
@@ -669,6 +670,74 @@ async function handleUpload() {
 }
 fileInput.addEventListener('change', handleUpload);
 
+// 新增：刷新按钮事件监听
+refreshBtn.addEventListener('click', () => {
+    showStatusMessage('正在刷新文件列表...', 'info');
+    fetchAndDisplayFiles(currentPath);
+});
+
+// 新增：创建文件夹按钮事件监听
+createFolderBtn.addEventListener('click', async () => {
+    const folderName = prompt('请输入新文件夹名称:');
+    if (!folderName || folderName.trim() === '') {
+        showStatusMessage('文件夹名称不能为空。', 'warning');
+        return;
+    }
+    // 简单校验，防止用户输入路径分隔符，实际安全由服务器端 normalizePath 保证
+    if (folderName.includes('/') || folderName.includes('\\')) {
+        showStatusMessage('文件夹名称不能包含路径分隔符。', 'error');
+        return;
+    }
+
+    const newFolderPath = normalizePath(currentPath + '/' + folderName);
+
+    showStatusMessage('正在创建文件夹...', 'success');
+    try {
+        const response = await fetch('/api/mkdir', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: newFolderPath }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        showStatusMessage(`文件夹 "${folderName}" 创建成功!`, 'success');
+        fetchAndDisplayFiles(currentPath); // 刷新文件列表
+    } catch (error) {
+        showStatusMessage(`创建文件夹失败: ${error.message}`, 'error');
+    }
+});
+
+// 新增：创建文件按钮事件监听
+createFileBtn.addEventListener('click', async () => {
+    const fileName = prompt('请输入新文件名称:');
+    if (!fileName || fileName.trim() === '') {
+        showStatusMessage('文件名称不能为空。', 'warning');
+        return;
+    }
+    // 简单校验，防止用户输入路径分隔符，实际安全由服务器端 normalizePath 保证
+    if (fileName.includes('/') || fileName.includes('\\')) {
+        showStatusMessage('文件名称不能包含路径分隔符。', 'error');
+        return;
+    }
+
+    const newFilePath = normalizePath(currentPath + '/' + fileName);
+
+    showStatusMessage('正在创建文件...', 'success');
+    try {
+        const response = await fetch('/api/touch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: newFilePath }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        showStatusMessage(`文件 "${fileName}" 创建成功!`, 'success');
+        fetchAndDisplayFiles(currentPath); // 刷新文件列表
+    } catch (error) {
+        showStatusMessage(`创建文件失败: ${error.message}`, 'error');
+    }
+});
+
 // 辅助函数：显示状态消息
 function showStatusMessage(message, type = 'success') {
     uploadStatusEl.textContent = message;
@@ -678,6 +747,8 @@ function showStatusMessage(message, type = 'success') {
         uploadStatusEl.style.color = '#ff4444';
     } else if (type === 'warning') {
         uploadStatusEl.style.color = '#ffcc00';
+    } else if (type === 'info') { // 新增信息类型
+        uploadStatusEl.style.color = '#85c1e9';
     }
     // 非错误消息在几秒后自动消失
     if (type !== 'error') {
@@ -687,13 +758,13 @@ function showStatusMessage(message, type = 'success') {
 
 // 页面初始加载
 document.addEventListener('DOMContentLoaded', () => {
-    // === 新增：加载文件浏览器宽度 ===
+    // 加载文件浏览器宽度
     const savedWidth = getCookie(FILE_BROWSER_WIDTH_COOKIE);
     if (savedWidth) {
         fileBrowserContainer.style.width = savedWidth;
     }
 
-    // === 新增：监听文件浏览器宽度变化并保存 ===
+    // 监听文件浏览器宽度变化并保存
     // 使用 MutationObserver 监听 style 属性变化，以捕获用户拖动改变宽度
     const observer = new MutationObserver(mutations => {
         mutations.forEach(mutation => {
@@ -708,7 +779,7 @@ document.addEventListener('DOMContentLoaded', () => {
     observer.observe(fileBrowserContainer, { attributes: true });
 
 
-    // === 新增：加载上次的文件路径 ===
+    // 加载上次的文件路径
     const savedPath = getCookie(LAST_FILE_PATH_COOKIE);
     // 使用规范化路径作为初始加载路径，如果Cookie中没有则使用默认值
     currentPath = savedPath ? normalizePath(savedPath) : normalizePath('/root');

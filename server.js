@@ -1,7 +1,7 @@
 // server.js (已修复 POSIX 问题 + 新功能 + 文件编辑器 + 中文注释 + HTTP基础验证)
 
 const http = require('http');
-const path = require('path'); // 确保已引入 path 模块
+const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -46,7 +46,7 @@ const upload = multer({ dest: 'uploads/' }); // 文件上传的临时目录
 
 // HTTP 基础验证配置
 app.use(basicAuth({
-    users: { 'whrstudio': '2477135976whr' },
+    users: { 'whrstudio': '2477135976whr' }, // 替换为你的实际用户名和密码
     challenge: true, // 这会使浏览器弹出登录框
     realm: 'WebTop Login', // 弹框上显示的领域名
 }));
@@ -55,7 +55,7 @@ app.use(express.json());
 
 const PORT = 3000;
 const sshConfig = {
-    host: '45.205.28.94', port: 22, username: 'root', password: 'vaxwKAEG7344',
+    host: '45.205.28.94', port: 22, username: 'root', password: 'vaxwKAEG7344', // 替换为你的实际SSH配置
 };
 
 // 全局共享的SSH客户端，用于文件操作
@@ -311,9 +311,10 @@ app.get('/api/package-download', async (req, res) => {
             
             // 遍历所有路径，找到最长的共同前缀
             for (let i = 1; i < itemPaths.length; i++) {
-                let currentPath = itemPaths[i];
-                // 确保 commonBaseDir 包含 currentPath，如果不包含，则向上移动 commonBaseDir
-                while (path.posix.isAbsolute(commonBaseDir) && !currentPath.startsWith(commonBaseDir + path.posix.sep) && commonBaseDir !== path.posix.sep) {
+                let currentPathForComparison = itemPaths[i];
+                // 确保 commonBaseDir 包含 currentPathForComparison，如果不包含，则向上移动 commonBaseDir
+                // 持续向上移动直到 commonBaseDir 成为 currentPathForComparison 的父目录或根目录
+                while (commonBaseDir !== path.posix.sep && !currentPathForComparison.startsWith(commonBaseDir + path.posix.sep)) {
                     commonBaseDir = path.posix.dirname(commonBaseDir);
                 }
                 if (commonBaseDir === path.posix.sep) break; // 如果已经到根目录，就停止
@@ -335,7 +336,8 @@ app.get('/api/package-download', async (req, res) => {
             // 关键修复：如果相对路径为空，意味着该项就是 commonBaseDir 本身，
             // 此时应使用 '.' 来表示当前目录的内容。
             if (relPath === '') {
-                return '.';
+                // 如果是目录，表示打包目录自身，则使用 '.'
+                return '.'; 
             }
             return relPath;
         });
@@ -426,6 +428,51 @@ app.post('/api/save-file', (req, res) => {
     writeStream.on('error', (err) => { console.error(`[SFTP 写入错误] 文件: ${remotePath}:`, err); res.status(500).json({ error: `保存文件失败: ${err.message}` }); });
     writeStream.end(Buffer.from(content, 'utf8'));
 });
+
+// 新增：创建目录 API 接口
+app.post('/api/mkdir', (req, res) => {
+    if (!sftp) return res.status(503).json({ error: 'SFTP 服务不可用' });
+    let { path: dirPath } = req.body;
+    if (!dirPath) {
+        return res.status(400).json({ error: '必须提供要创建的目录路径。' });
+    }
+
+    // 规范化路径
+    dirPath = path.posix.normalize(dirPath);
+
+    sftp.mkdir(dirPath, (err) => {
+        if (err) {
+            console.error(`[SFTP 创建目录错误] 路径: ${dirPath}:`, err);
+            return res.status(500).json({ error: `创建目录失败: ${err.message}` });
+        }
+        res.json({ success: true, message: `目录 "${dirPath}" 已成功创建。` });
+    });
+});
+
+// 新增：创建空文件 API 接口
+app.post('/api/touch', (req, res) => {
+    if (!sftp) return res.status(503).json({ error: 'SFTP 服务不可用' });
+    let { path: filePath, content = '' } = req.body; // 允许提供初始内容，默认为空
+    if (!filePath) {
+        return res.status(400).json({ error: '必须提供要创建的文件路径。' });
+    }
+
+    // 规范化路径
+    filePath = path.posix.normalize(filePath);
+
+    // 使用 createWriteStream 创建文件并立即关闭（如果内容为空）或写入内容
+    const writeStream = sftp.createWriteStream(filePath);
+    writeStream.on('close', () => {
+        res.json({ success: true, message: `文件 "${filePath}" 已成功创建。` });
+    });
+    writeStream.on('error', (err) => {
+        console.error(`[SFTP 创建文件错误] 路径: ${filePath}:`, err);
+        res.status(500).json({ error: `创建文件失败: ${err.message}` });
+    });
+    // 写入内容并结束流
+    writeStream.end(Buffer.from(content, 'utf8'));
+});
+
 
 // --- (静态文件服务和 WebSocket 逻辑无变动) ---
 app.use(express.static(path.join(__dirname, 'public')));
