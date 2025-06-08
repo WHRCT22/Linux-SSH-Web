@@ -1,3 +1,5 @@
+// client.js
+
 // --- (终端设置 - 无变动) ---
 const term = new Terminal({
     cursorBlink: true,
@@ -123,12 +125,11 @@ const currentPathEl = document.getElementById('current-path');
 const fileInput = document.getElementById('file-input');
 const uploadPathInput = document.getElementById('upload-path');
 const uploadStatusEl = document.getElementById('upload-status');
-let currentPath = '/root'; // 默认起始路径
+// let currentPath = '/root'; // 默认起始路径 - 将在 DOMContentLoaded 中从 Cookie 读取或使用此默认值
 
 const contextMenu = document.getElementById('context-menu');
 const renameBtn = document.getElementById('rename-btn');
 const deleteBtn = document.getElementById('delete-btn');
-//const packageBtn = document.getElementById('package-btn'); // 现在用于单个目录/文件打包 ZIP
 
 // 编辑器与上下文菜单元素
 const editBtn = document.getElementById('edit-btn');
@@ -144,6 +145,14 @@ const selectAllCheckbox = document.getElementById('select-all-checkbox');
 const downloadSelectedBtn = document.getElementById('download-selected-btn');
 const selectedFiles = new Set(); // 存储选中的完整路径
 
+// === 新增：文件浏览器面板元素，用于保存宽度 ===
+const fileBrowserContainer = document.getElementById('file-browser-container');
+
+// === 新增：Cookie 常量 ===
+const FILE_BROWSER_WIDTH_COOKIE = 'fileBrowserWidth';
+const LAST_FILE_PATH_COOKIE = 'lastFilePath';
+let currentPath = '/root'; // 默认路径，如果Cookie中没有保存，则使用此路径
+
 // 辅助函数：格式化字节大小 (客户端本地函数)
 function formatBytes(bytes) {
     if (bytes === 0) return '0 B';
@@ -155,7 +164,7 @@ function formatBytes(bytes) {
 
 /**
  * 客户端侧的 POSIX 路径规范化函数。
- * 处理双斜杠、`..`、`.` 等，确保路径以 `/` 开头且不以 `/` 结尾（除非是根目录）。
+ * 处理双斜杠、`..`、`.`等，确保路径以 `/` 开头且不以 `/` 结尾（除非是根目录）。
  * @param {string} p 原始路径字符串
  * @returns {string} 规范化后的路径
  */
@@ -190,6 +199,38 @@ function normalizePath(p) {
     return normalized === '' ? '/' : normalized;
 }
 
+// === 新增：Cookie 辅助函数 ===
+/**
+ * 设置 Cookie
+ * @param {string} name Cookie 名称
+ * @param {string} value Cookie 值
+ * @param {number} days Cookie 有效期（天）
+ */
+function setCookie(name, value, days) {
+    let expires = "";
+    if (days) {
+        const date = new Date();
+        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+        expires = "; expires=" + date.toUTCString();
+    }
+    document.cookie = name + "=" + (value || "") + expires + "; path=/";
+}
+
+/**
+ * 获取 Cookie
+ * @param {string} name Cookie 名称
+ * @returns {string|null} Cookie 值，如果不存在则返回 null
+ */
+function getCookie(name) {
+    const nameEQ = name + "=";
+    const ca = document.cookie.split(';');
+    for (let i = 0; i < ca.length; i++) {
+        let c = ca[i];
+        while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+        if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+    }
+    return null;
+}
 
 // 更新下载选中项按钮的禁用状态和文本
 function updateDownloadSelectedButtonState() {
@@ -227,6 +268,7 @@ async function fetchAndDisplayFiles(pathStr) {
         currentPath = normalizePath(data.path);
         currentPathEl.textContent = currentPath;
         uploadPathInput.value = currentPath; // 更新上传目标路径
+        setCookie(LAST_FILE_PATH_COOKIE, currentPath, 365); // === 新增：保存当前路径到 Cookie ===
         renderFileList(data.files);
     } catch (error) {
         fileListEl.innerHTML = `<li><i class="fas fa-exclamation-triangle fa-fw"></i> 错误: ${error.message}</li>`;
@@ -508,24 +550,6 @@ deleteBtn.addEventListener('click', async () => {
     }
 });
 
-// === 修改：packageBtn 也使用 GET 请求到统一的打包接口 (与多选打包逻辑相同) ===
-//packageBtn.addEventListener('click', () => {
-//    const pathToPackage = contextMenu.dataset.path; // 已经是规范化后的路径
-//    const nameToPackage = contextMenu.dataset.name;
-//    if (!pathToPackage) return;
-//
-//   showStatusMessage(`正在打包 "${nameToPackage}" 为 ZIP...`, 'success');
-    
-    // 构建 GET 请求的 URL
-    // 此处与 downloadSelectedBtn 逻辑一致，都是通过 `paths` 参数传递路径
-//    const downloadUrl = `/api/package-download?paths=${encodeURIComponent(pathToPackage)}`;
-
-    // 直接设置 window.location.href 触发浏览器下载
-//    window.location.href = downloadUrl;
-
-    // 对于 GET 方式的下载，我们无法直接获取下载是否成功，所以只能假设成功
-//});
-
 // 在线文件编辑器逻辑
 editBtn.addEventListener('click', () => {
     const path = contextMenu.dataset.path; // 已经是规范化后的路径
@@ -663,8 +687,34 @@ function showStatusMessage(message, type = 'success') {
 
 // 页面初始加载
 document.addEventListener('DOMContentLoaded', () => {
-    // 初始加载时也使用规范化路径
-    fetchAndDisplayFiles(normalizePath(currentPath));
+    // === 新增：加载文件浏览器宽度 ===
+    const savedWidth = getCookie(FILE_BROWSER_WIDTH_COOKIE);
+    if (savedWidth) {
+        fileBrowserContainer.style.width = savedWidth;
+    }
+
+    // === 新增：监听文件浏览器宽度变化并保存 ===
+    // 使用 MutationObserver 监听 style 属性变化，以捕获用户拖动改变宽度
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                const currentWidth = fileBrowserContainer.style.width;
+                if (currentWidth) {
+                    setCookie(FILE_BROWSER_WIDTH_COOKIE, currentWidth, 365); // 保存1年
+                }
+            }
+        });
+    });
+    observer.observe(fileBrowserContainer, { attributes: true });
+
+
+    // === 新增：加载上次的文件路径 ===
+    const savedPath = getCookie(LAST_FILE_PATH_COOKIE);
+    // 使用规范化路径作为初始加载路径，如果Cookie中没有则使用默认值
+    currentPath = savedPath ? normalizePath(savedPath) : normalizePath('/root');
+    fetchAndDisplayFiles(currentPath);
+
+
     // 检查剪贴板读取权限，提高用户体验
     navigator.permissions.query({ name: 'clipboard-read' }).then(result => {
         if (result.state == 'granted' || result.state == 'prompt') {
