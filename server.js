@@ -165,12 +165,12 @@ app.use(basicAuth({
 
 app.use(express.json());
 
-const PORT = 3000;
+const PORT = 3001;
 const sshConfig = {
-    host: '45.205.28.94',
+    host: '127.0.0.1',
     port: 22,
     username: 'root',
-    password: 'vaxwKAEG7344', // 替换为你的实际SSH配置
+    password: '2477135976whr', // 替换为你的实际SSH配置
 };
 
 // 全局共享的SSH客户端，用于文件操作
@@ -223,21 +223,98 @@ app.get('/api/files', (req, res) => {
     let remotePath = req.query.path || '.';
     remotePath = path.posix.normalize(remotePath);
 
-    sftp.readdir(remotePath, (err, list) => {
+    sftp.readdir(remotePath, async (err, list) => { // 将回调函数标记为 async
         if (err) {
             // 返回错误时也使用规范化后的路径
             return res.status(400).json({ error: err.message, path: remotePath });
         }
-        const files = list.map(item => ({
-            name: item.filename,
-            type: item.attrs.isDirectory() ? 'dir' : 'file',
-            size: item.attrs.size,
-            modified: item.attrs.mtime * 1000,
-        })).sort((a, b) => {
-            // 目录排在文件前面
-            if (a.type === 'dir' && b.type === 'file') return -1;
-            if (a.type === 'file' && b.type === 'dir') return 1;
-            // 然后按名称排序
+
+        // 使用 Promise.all 处理异步的 stat 或 readlink 操作
+        const filesPromises = list.map(async (item) => {
+            let type = 'file'; // 默认类型为文件
+            let size = item.attrs.size;
+            let modified = item.attrs.mtime * 1000;
+            let symlinkTarget = undefined; // 存储符号链接的目标路径
+
+            // 获取完整的项目路径，用于 stat 和 readlink
+            const fullItemPath = path.posix.join(remotePath, item.filename);
+
+            if (item.attrs.isSymbolicLink()) {
+                // 如果是符号链接，需要进一步检查它指向什么
+                try {
+                    // 尝试获取符号链接的目标属性（会跟随链接）
+                    const targetStats = await new Promise((resolve, reject) => {
+                        sftp.stat(fullItemPath, (statErr, s) => {
+                            if (statErr) {
+                                // 如果stat失败（例如，链接指向一个不存在的文件或目录，或者权限问题）
+                                console.warn(`[SFTP] Could not stat symlink target for ${fullItemPath}: ${statErr.message}`);
+                                return resolve(null); // 返回null表示链接目标不可达/不存在
+                            }
+                            resolve(s);
+                        });
+                    });
+
+                    // 获取符号链接的实际目标路径（不跟随链接）
+                    symlinkTarget = await new Promise((resolve, reject) => {
+                        sftp.readlink(fullItemPath, (readlinkErr, target) => {
+                            if (readlinkErr) {
+                                console.warn(`[SFTP] Could not readlink for ${fullItemPath}: ${readlinkErr.message}`);
+                                return resolve('unknown (readlink error)');
+                            }
+                            resolve(target);
+                        });
+                    }).catch(e => `unknown (readlink failed: ${e.message})`); // 捕获readlink本身的错误
+
+                    if (targetStats) {
+                        // 如果目标可达
+                        if (targetStats.isDirectory()) {
+                            type = 'symlink_dir'; // 符号链接到目录
+                        } else {
+                            type = 'symlink_file'; // 符号链接到文件
+                        }
+                        // 对于符号链接，通常会报告其目标的大小和修改时间
+                        size = targetStats.size;
+                        modified = targetStats.mtime * 1000;
+                    } else {
+                        // 链接目标不可达或不存在（断开的链接）
+                        type = 'symlink_broken';
+                    }
+                } catch (e) {
+                    // 如果在处理符号链接时发生其他错误
+                    console.error(`[SFTP] Error processing symlink ${fullItemPath}: ${e.message}`);
+                    type = 'symlink_broken';
+                    symlinkTarget = `error (${e.message})`;
+                }
+            } else if (item.attrs.isDirectory()) {
+                type = 'dir'; // 普通目录
+            }
+            // else 默认 type 仍为 'file'
+
+            return {
+                name: item.filename,
+                type: type,
+                size: size,
+                modified: modified,
+                symlinkTarget: symlinkTarget // 添加符号链接目标，前端可显示
+            };
+        });
+
+        // 等待所有异步操作完成
+        const files = (await Promise.all(filesPromises)).sort((a, b) => {
+            // 改进排序逻辑：
+            // 1. 目录 ('dir') 优先
+            // 2. 符号链接到目录 ('symlink_dir') 其次
+            // 3. 文件 ('file')
+            // 4. 符号链接到文件 ('symlink_file')
+            // 5. 断开的符号链接 ('symlink_broken') 最后
+            // 6. 同类型按名称排序
+
+            const typeOrder = { 'dir': 0, 'symlink_dir': 1, 'file': 2, 'symlink_file': 3, 'symlink_broken': 4 };
+
+            if (typeOrder[a.type] !== typeOrder[b.type]) {
+                return typeOrder[a.type] - typeOrder[b.type];
+            }
+            // 类型相同则按名称排序
             return a.name.localeCompare(b.name);
         });
         // 返回规范化后的路径给客户端
@@ -246,6 +323,7 @@ app.get('/api/files', (req, res) => {
 });
 
 // GET /api/download (保持不变，用于单个文件的直接下载，非ZIP)
+// SFTP createReadStream 通常会自动跟随符号链接，因此无需修改
 app.get('/api/download', (req, res) => {
     if (!sftp) return res.status(503).send('SFTP 服务不可用');
     let remotePath = req.query.path;
@@ -254,12 +332,12 @@ app.get('/api/download', (req, res) => {
     // 规范化路径
     remotePath = path.posix.normalize(remotePath);
 
-    sftp.stat(remotePath, (err, stats) => {
+    sftp.stat(remotePath, (err, stats) => { // sftp.stat 默认会跟随符号链接
         if (err) {
             console.error(`[SFTP 下载] 状态错误: ${err.message}, Path: ${remotePath}`);
             return res.status(404).send('文件未找到或访问被拒绝。');
         }
-        if (stats.isDirectory()) {
+        if (stats.isDirectory()) { // 如果stat后发现是目录（包括跟随链接后的目录），则不让下载
             return res.status(400).send('无法直接下载目录，请使用打包下载功能。');
         }
 
@@ -294,7 +372,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     console.log(`[上传] 尝试上传文件到: ${remotePath}`);
 
     const readStream = fs.createReadStream(localPath);
-    const writeStream = sftp.createWriteStream(remotePath);
+    const writeStream = sftp.createWriteStream(remotePath); // createWriteStream 也会跟随链接
 
     writeStream.on('close', () => {
         fs.unlink(localPath, (err) => { // 删除临时上传文件
@@ -322,6 +400,7 @@ app.post('/api/rename', (req, res) => {
     oldPath = path.posix.normalize(oldPath);
     newPath = path.posix.normalize(newPath);
 
+    // sftp.rename 默认会跟随链接
     sftp.rename(oldPath, newPath, (err) => {
         if (err) {
             console.error(`[SFTP 重命名错误] 从 ${oldPath} 到 ${newPath}:`, err);
@@ -341,14 +420,28 @@ app.delete('/api/delete', (req, res) => {
     // 规范化路径
     delPath = path.posix.normalize(delPath);
 
-    const operation = type === 'dir' ? 'rmdir' : 'unlink'; // rmdir 删除目录, unlink 删除文件
+    // 对于符号链接，无论是指向文件还是目录，都应该使用 unlink 来删除链接本身。
+    // 如果想要删除链接目标（即真正的文件或目录），则需要先 resolve 链接。
+    // 这里的逻辑是删除链接本身，如果想删除目标，前端需要单独处理。
+    const operation = (type === 'dir' || type === 'symlink_dir') ? 'rmdir' : 'unlink'; // 保持原样，如果前端传 'dir' 且是符号链接，rmdir 可能会失败
+    // 优化：对于任何类型的符号链接，都应该使用 unlink 来删除符号链接本身
+    let actualOperation = 'unlink'; // 默认删除文件或符号链接
+    if (type === 'dir') { // 只有在明确是“真”目录时才使用 rmdir
+        actualOperation = 'rmdir';
+    }
 
-    sftp[operation](delPath, (err) => {
+    sftp[actualOperation](delPath, (err) => {
         if (err) {
             console.error(`[SFTP 删除错误] 操作对象 ${delPath}:`, err);
             // 目录不为空的错误码通常是 4 (SSH_FX_BAD_MESSAGE) 或者其他类型
-            if (err.code === 4 && type === 'dir') {
+            // 对于 rmdir，如果目录不为空，会报错。对于符号链接，如果用 rmdir 会报错 "Not a directory"
+            if (err.code === 4 && type === 'dir' && actualOperation === 'rmdir') {
                 return res.status(400).json({ error: '目录不为空，无法删除。' });
+            }
+            // 如果是符号链接，但前端请求删除类型是 'dir'，且尝试用 rmdir 导致失败
+            // 客户端需要知道如何处理符号链接的删除，通常是 unlink 链接本身
+            if (err.message.includes("Not a directory") && (type === 'symlink_dir' || type === 'symlink_file')) {
+                 return res.status(400).json({ error: `无法删除符号链接，请使用 "文件" 类型删除（unlink 操作）。${err.message}` });
             }
             return res.status(500).json({ error: `删除失败: ${err.message}` });
         }
@@ -413,7 +506,8 @@ app.get('/api/package-download', async (req, res) => {
         if (itemPaths.length > 0) {
             commonBaseDir = itemPaths[0]; // 从第一个路径开始
 
-            // 如果第一个路径是文件，将其父目录作为起始commonBaseDir
+            // 如果第一个路径是文件或符号链接，将其父目录作为起始commonBaseDir
+            // stat 会跟随符号链接
             try {
                 const stats = await new Promise((resolve, reject) => sftp.stat(commonBaseDir, (err, s) => err ? reject(err) : resolve(s)));
                 if (!stats.isDirectory()) {
@@ -523,6 +617,7 @@ app.get('/api/file-content', (req, res) => {
     // 规范化路径
     remotePath = path.posix.normalize(remotePath);
 
+    // sftp.createReadStream 默认会跟随符号链接
     const readStream = sftp.createReadStream(remotePath, { encoding: 'utf8' });
     let fileContent = '';
     readStream.on('data', (chunk) => { fileContent += chunk; });
@@ -538,6 +633,7 @@ app.post('/api/save-file', (req, res) => {
     // 规范化路径
     remotePath = path.posix.normalize(remotePath);
 
+    // sftp.createWriteStream 默认会跟随符号链接
     const writeStream = sftp.createWriteStream(remotePath);
     writeStream.on('close', () => { res.json({ success: true, message: `文件已成功保存至 ${remotePath}` }); });
     writeStream.on('error', (err) => { console.error(`[SFTP 写入错误] 文件: ${remotePath}:`, err); res.status(500).json({ error: `保存文件失败: ${err.message}` }); });
@@ -576,6 +672,7 @@ app.post('/api/touch', (req, res) => {
     filePath = path.posix.normalize(filePath);
 
     // 使用 createWriteStream 创建文件并立即关闭（如果内容为空）或写入内容
+    // sftp.createWriteStream 默认会跟随符号链接
     const writeStream = sftp.createWriteStream(filePath);
     writeStream.on('close', () => {
         res.json({ success: true, message: `文件 "${filePath}" 已成功创建。` });
@@ -641,6 +738,11 @@ wss.on('connection', (ws, req) => {
             } catch (error) {
                 console.error('[状态错误] ', error.message);
                 lastStats = null; // 出现错误时重置lastStats，防止下次计算速度出错
+            }
+            // 确保sshClient.conn存在且可用，避免在连接中断后重复报错
+            if (!sshClient.conn || sshClient.conn._state !== 'ready') {
+                console.warn('[状态监控] SSH连接不再就绪，停止状态监控。');
+                clearInterval(statsInterval);
             }
         }, 2000); // 每2秒发送一次状态
 
