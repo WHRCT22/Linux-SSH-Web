@@ -286,7 +286,7 @@ async function fetchAndDisplayFiles(pathStr) {
 }
 
 // 检查文件是否可编辑的辅助函数
-function isEditable(filename) {
+function isEditable(filename, fileType) { // 新增 fileType 参数
     const editableExtensions = [
         '.txt', '.log', '.json', '.xml', '.yaml', '.yml', '.ini', '.cfg', '.conf', '.cnf',
         '.md', '.sh', '.bash', '.zsh', '.c', '.cpp', '.h', '.hpp', '.cs', '.java',
@@ -295,6 +295,11 @@ function isEditable(filename) {
     ];
     // 检查文件名本身是否可编辑 (如 'Dockerfile'，没有后缀名)
     const commonNoExtFiles = ['dockerfile', 'makefile', 'license', 'readme', 'changelog', 'nginx.conf', 'apache.conf'];
+
+    // 只有当文件类型是普通文件或符号链接到文件时才可编辑
+    if (fileType !== 'file' && fileType !== 'symlink_file') {
+        return false;
+    }
 
     const lowerFilename = filename.toLowerCase();
     // 检查是否有后缀名，如果有则检查后缀名，如果没有则检查完整文件名
@@ -332,7 +337,7 @@ function renderFileList(files) {
         const fullPath = normalizePath(currentPath + '/' + file.name);
 
         li.dataset.path = fullPath;
-        li.dataset.type = file.type;
+        li.dataset.type = file.type; // 服务器返回的精确类型
         li.dataset.name = file.name;
 
         // 创建并附加复选框
@@ -366,7 +371,15 @@ function renderFileList(files) {
 
         // 创建并附加图标
         const iconEl = document.createElement('i');
-        iconEl.classList.add('fas', file.type === 'dir' ? 'fa-folder' : 'fa-file-alt', 'fa-fw');
+        iconEl.classList.add('fas', 'fa-fw');
+        
+        // 根据文件类型设置图标 (保持原有的文件夹和文件图标，不新增链接图标)
+        if (file.type === 'dir' || file.type === 'symlink_dir') {
+            iconEl.classList.add('fa-folder');
+        } else { // 'file', 'symlink_file', 'symlink_broken'
+            iconEl.classList.add('fa-file-alt');
+        }
+
         li.appendChild(iconEl);
 
         // 创建并附加文件名
@@ -375,8 +388,17 @@ function renderFileList(files) {
         nameSpan.textContent = file.name;
         li.appendChild(nameSpan);
 
+        // 如果是符号链接，可以额外显示目标路径（可选）
+        if (file.symlinkTarget) {
+            const targetSpan = document.createElement('span');
+            targetSpan.classList.add('symlink-target');
+            // targetSpan.textContent = ` -> ${file.symlinkTarget}`;
+            li.appendChild(targetSpan);
+        }
+
         // 创建并附加文件大小（如果适用）
-        if (file.type === 'file') {
+        // 对于 symlink_dir 也可以显示大小 (即它指向的目录的总大小，由后端提供)
+        if (file.type !== 'dir' && file.type !== 'symlink_dir') { // 只有文件类型和指向文件的符号链接才显示大小
             const sizeSpan = document.createElement('span');
             sizeSpan.classList.add('file-size');
             sizeSpan.textContent = formatBytes(file.size);
@@ -384,16 +406,21 @@ function renderFileList(files) {
         }
 
         // 定义点击和双击行为
-        if (file.type === 'dir') {
+        // 将普通目录和指向目录的符号链接都视为可点击进入的目录
+        const isDirectoryLike = (file.type === 'dir' || file.type === 'symlink_dir');
+        // 可编辑判断现在传入 file.type
+        const canBeEdited = isEditable(file.name, file.type);
+
+
+        if (isDirectoryLike) {
             li.onclick = (e) => {
                 if (!e.target.classList.contains('file-checkbox')) { // 避免点击复选框时触发导航
-                     fetchAndDisplayFiles(fullPath);
+                     fetchAndDisplayFiles(fullPath); // 服务器端的 SFTP readdir 会自动跟随链接
                 }
             };
             li.style.cursor = 'pointer'; // 目录可点击
         } else {
-            // 文件项的点击行为
-            const canBeEdited = isEditable(file.name);
+            // 文件项的点击行为 (普通文件、指向文件的符号链接、断开的符号链接)
             li.onclick = (e) => {
                 if (e.target.classList.contains('file-checkbox')) {
                     // 如果点击的是复选框，则其自身的 change 事件会处理
@@ -476,12 +503,12 @@ fileListEl.addEventListener('contextmenu', (e) => {
     e.preventDefault(); // 阻止默认右键菜单
 
     contextMenu.dataset.path = targetLi.dataset.path;
-    contextMenu.dataset.type = targetLi.dataset.type;
+    contextMenu.dataset.type = targetLi.dataset.type; // 获取精确类型
     contextMenu.dataset.name = targetLi.dataset.name;
 
     // 根据项目类型显示/隐藏菜单项
-    const isDir = targetLi.dataset.type === 'dir';
-    const canBeEdited = !isDir && isEditable(targetLi.dataset.name);
+    // 判断是否可编辑时，需要考虑新的文件类型
+    const canBeEdited = isEditable(targetLi.dataset.name, targetLi.dataset.type);
 
 
     editBtn.classList.toggle('hidden', !canBeEdited); // 可编辑文件显示，其他隐藏
@@ -544,7 +571,7 @@ renameBtn.addEventListener('click', async () => {
 
 deleteBtn.addEventListener('click', async () => {
     const pathToDelete = contextMenu.dataset.path; // 已经是规范化后的路径
-    const typeToDelete = contextMenu.dataset.type;
+    const typeToDelete = contextMenu.dataset.type; // 将服务器返回的精确类型传给后端
     const nameToDelete = contextMenu.dataset.name;
     if (!pathToDelete) return;
 
@@ -721,7 +748,7 @@ createFolderBtn.addEventListener('click', async () => {
     }
 });
 
-// 新增：创建文件按钮事件监听
+// 新增：创建空文件按钮事件监听
 createFileBtn.addEventListener('click', async () => {
     const fileName = prompt('请输入新文件名称:');
     if (!fileName || fileName.trim() === '') {
@@ -738,7 +765,7 @@ createFileBtn.addEventListener('click', async () => {
 
     showStatusMessage('正在创建文件...', 'success');
     try {
-        const response = await fetch('/api/touch', {
+        const response = await fetch('/api/touch', { // 客户端通过 fetch 调用服务器的 /api/touch 接口
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: newFilePath }),
